@@ -1,0 +1,315 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>OpenClaw 用量监控</title>
+<style>
+  :root {
+    --bg: #0d1117; --surface: #161b22; --border: #30363d;
+    --text: #e6edf3; --text2: #8b949e; --text3: #484f58;
+    --green: #3fb950; --yellow: #d29922; --red: #f85149; --blue: #58a6ff; --purple: #bc8cff;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: -apple-system, 'SF Pro Text', 'Helvetica Neue', sans-serif; background: var(--bg); color: var(--text); padding: 20px; max-width: 1200px; margin: 0 auto; }
+  h1 { font-size: 20px; font-weight: 600; margin-bottom: 4px; }
+  .subtitle { color: var(--text2); font-size: 13px; margin-bottom: 20px; }
+  .subtitle span { color: var(--green); }
+
+  /* Cards Grid */
+  .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px; margin-bottom: 24px; }
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 16px; }
+  .card-label { font-size: 12px; color: var(--text2); margin-bottom: 6px; }
+  .card-value { font-size: 24px; font-weight: 700; }
+  .card-value.cost { color: var(--blue); }
+  .card-sub { font-size: 11px; color: var(--text3); margin-top: 4px; }
+
+  /* Section */
+  .section { margin-bottom: 24px; }
+  .section-title { font-size: 15px; font-weight: 600; margin-bottom: 12px; padding-bottom: 6px; border-bottom: 1px solid var(--border); }
+
+  /* Quota bars */
+  .quota-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 12px; }
+  .quota-card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 14px; }
+  .quota-name { font-size: 13px; font-weight: 600; margin-bottom: 8px; }
+  .quota-bar-bg { height: 8px; background: var(--border); border-radius: 4px; overflow: hidden; margin-bottom: 4px; }
+  .quota-bar { height: 100%; border-radius: 4px; transition: width 0.5s ease; }
+  .quota-info { font-size: 11px; color: var(--text2); display: flex; justify-content: space-between; }
+
+  /* Table */
+  table { width: 100%; border-collapse: collapse; background: var(--surface); border-radius: 10px; overflow: hidden; border: 1px solid var(--border); }
+  th { background: var(--bg); font-size: 12px; color: var(--text2); padding: 10px 12px; text-align: left; cursor: pointer; user-select: none; white-space: nowrap; }
+  th:hover { color: var(--text); }
+  th .sort { font-size: 10px; margin-left: 2px; }
+  td { font-size: 13px; padding: 8px 12px; border-top: 1px solid var(--border); }
+  tr:hover td { background: rgba(88,166,255,0.04); }
+  .mono { font-family: 'SF Mono', 'Menlo', monospace; font-size: 12px; }
+  .free-tag { background: var(--green); color: #000; font-size: 10px; padding: 1px 5px; border-radius: 3px; font-weight: 600; }
+
+  /* Chart */
+  .chart-wrap { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 16px; }
+  canvas { width: 100%; height: 200px; }
+
+  /* Tips */
+  .tip { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 10px 14px; margin-bottom: 8px; font-size: 13px; display: flex; align-items: center; gap: 8px; }
+  .tip-icon { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+  .tip-icon.info { background: var(--blue); }
+  .tip-icon.success { background: var(--green); }
+  .tip-icon.warning { background: var(--yellow); }
+  .tip-icon.danger { background: var(--red); }
+
+  /* Responsive */
+  @media (max-width: 600px) {
+    .cards { grid-template-columns: repeat(2, 1fr); }
+    .card-value { font-size: 18px; }
+  }
+</style>
+</head>
+<body>
+
+<h1>OpenClaw 用量监控</h1>
+<div class="subtitle">上次刷新: <span id="updatedAt">-</span></div>
+
+<div class="cards" id="overview"></div>
+
+<div class="section">
+  <div class="section-title">供应商额度</div>
+  <div class="quota-grid" id="quotas"></div>
+</div>
+
+<div class="section">
+  <div class="section-title">每日趋势（近 30 天）</div>
+  <div class="chart-wrap"><canvas id="chart"></canvas></div>
+</div>
+
+<div class="section">
+  <div class="section-title">模型用量明细</div>
+  <div style="overflow-x:auto;"><table id="modelTable"><thead><tr></tr></thead><tbody></tbody></table></div>
+</div>
+
+<div class="section">
+  <div class="section-title">省钱建议</div>
+  <div id="tips"></div>
+</div>
+
+<script>
+const $ = s => document.querySelector(s);
+const API = '';
+let sortCol = 'cost', sortAsc = false;
+
+function fmt(n, d=2) { return n == null ? '-' : (typeof n === 'number' ? (n < 0.01 && n > 0 ? n.toFixed(6) : n.toFixed(d)) : n); }
+function fmtCost(n) { return n == null ? '-' : '$' + fmt(n, 4); }
+function fmtTokens(n) { if (n == null) return '-'; if (n >= 1e6) return (n/1e6).toFixed(1)+'M'; if (n >= 1e3) return (n/1e3).toFixed(1)+'K'; return n.toString(); }
+
+function renderOverview(s) {
+  const items = [
+    { label: '今日花费', value: fmtCost(s.todayCost), cls: 'cost' },
+    { label: '本周花费', value: fmtCost(s.weekCost), cls: 'cost' },
+    { label: '本月花费', value: fmtCost(s.monthCost), cls: 'cost' },
+    { label: '累计花费', value: fmtCost(s.totalCost), cls: 'cost' },
+    { label: '总 Tokens', value: fmtTokens(s.totalTokens) },
+    { label: 'API 调用', value: s.totalCalls?.toLocaleString() || '0' },
+  ];
+  $('#overview').innerHTML = items.map(i => `
+    <div class="card">
+      <div class="card-label">${i.label}</div>
+      <div class="card-value ${i.cls||''}">${i.value}</div>
+    </div>`).join('');
+}
+
+function renderQuotas(data) {
+  const providerMap = {};
+  (data.providers || []).forEach(p => providerMap[p.provider] = p);
+
+  // Show known providers
+  const known = [
+    { key: 'zenmux', name: 'ZenMux', note: '余额请查看 zenmux.ai 控制台' },
+    { key: 'openai', name: 'OpenAI (Direct)', note: '余额请查看 platform.openai.com' },
+    { key: 'google-antigravity', name: 'Google Antigravity', note: 'OAuth 免费额度，按配额刷新' },
+  ];
+
+  let quotaData = [];
+  if (data.quotas && !data.quotas.error && data.quotas.parsed !== false) {
+    // If we have structured quota data from CLI
+    if (Array.isArray(data.quotas)) quotaData = data.quotas;
+    else if (data.quotas.providers) quotaData = data.quotas.providers;
+  }
+
+  const quotaMap = {};
+  quotaData.forEach(q => { quotaMap[q.provider || q.name] = q; });
+
+  $('#quotas').innerHTML = known.map(k => {
+    const p = providerMap[k.key] || {};
+    const q = quotaMap[k.key];
+    const usedPct = q?.usedPercent ?? null;
+    const barColor = usedPct == null ? 'var(--text3)' : usedPct > 80 ? 'var(--red)' : usedPct > 50 ? 'var(--yellow)' : 'var(--green)';
+    const resetAt = q?.resetAt ? new Date(q.resetAt).toLocaleString('zh-CN') : null;
+
+    return `<div class="quota-card">
+      <div class="quota-name">${k.name}</div>
+      <div class="quota-bar-bg"><div class="quota-bar" style="width:${usedPct ?? 0}%;background:${barColor}"></div></div>
+      <div class="quota-info">
+        <span>${usedPct != null ? `已用 ${usedPct.toFixed(1)}%` : k.note}</span>
+        <span>${p.calls ? p.calls + ' 次调用' : ''}${resetAt ? ' | 重置: '+resetAt : ''}</span>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function renderChart(daily) {
+  const canvas = $('#chart');
+  const ctx = canvas.getContext('2d');
+  const dpr = window.devicePixelRatio || 1;
+  const rect = canvas.getBoundingClientRect();
+  canvas.width = rect.width * dpr;
+  canvas.height = 200 * dpr;
+  ctx.scale(dpr, dpr);
+  const W = rect.width, H = 200;
+  const pad = { t: 20, r: 20, b: 30, l: 50 };
+  const cW = W - pad.l - pad.r, cH = H - pad.t - pad.b;
+
+  ctx.clearRect(0, 0, W, H);
+
+  if (!daily || daily.length === 0) {
+    ctx.fillStyle = '#8b949e';
+    ctx.font = '13px -apple-system, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('暂无数据', W/2, H/2);
+    return;
+  }
+
+  const costs = daily.map(d => d.cost);
+  const maxCost = Math.max(...costs, 0.01);
+
+  // Grid
+  ctx.strokeStyle = '#21262d';
+  ctx.lineWidth = 1;
+  for (let i = 0; i <= 4; i++) {
+    const y = pad.t + (cH * i / 4);
+    ctx.beginPath(); ctx.moveTo(pad.l, y); ctx.lineTo(W - pad.r, y); ctx.stroke();
+    ctx.fillStyle = '#8b949e';
+    ctx.font = '10px SF Mono, Menlo, monospace';
+    ctx.textAlign = 'right';
+    ctx.fillText('$' + (maxCost * (1 - i/4)).toFixed(3), pad.l - 6, y + 3);
+  }
+
+  // X labels
+  ctx.fillStyle = '#8b949e';
+  ctx.font = '10px SF Mono, Menlo, monospace';
+  ctx.textAlign = 'center';
+  const step = Math.max(1, Math.floor(daily.length / 6));
+  daily.forEach((d, i) => {
+    if (i % step === 0 || i === daily.length - 1) {
+      const x = pad.l + (i / (daily.length - 1 || 1)) * cW;
+      ctx.fillText(d.date.slice(5), x, H - 8);
+    }
+  });
+
+  // Line
+  ctx.strokeStyle = '#58a6ff';
+  ctx.lineWidth = 2;
+  ctx.lineJoin = 'round';
+  ctx.beginPath();
+  daily.forEach((d, i) => {
+    const x = pad.l + (i / (daily.length - 1 || 1)) * cW;
+    const y = pad.t + cH - (d.cost / maxCost) * cH;
+    i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+  });
+  ctx.stroke();
+
+  // Fill
+  const last = daily.length - 1;
+  ctx.lineTo(pad.l + cW, pad.t + cH);
+  ctx.lineTo(pad.l, pad.t + cH);
+  ctx.closePath();
+  const grad = ctx.createLinearGradient(0, pad.t, 0, pad.t + cH);
+  grad.addColorStop(0, 'rgba(88,166,255,0.15)');
+  grad.addColorStop(1, 'rgba(88,166,255,0)');
+  ctx.fillStyle = grad;
+  ctx.fill();
+
+  // Dots
+  daily.forEach((d, i) => {
+    const x = pad.l + (i / (daily.length - 1 || 1)) * cW;
+    const y = pad.t + cH - (d.cost / maxCost) * cH;
+    ctx.beginPath(); ctx.arc(x, y, 3, 0, Math.PI * 2);
+    ctx.fillStyle = '#58a6ff'; ctx.fill();
+  });
+}
+
+function renderModels(models) {
+  const cols = [
+    { key: 'key', label: '模型', fmt: v => v },
+    { key: 'provider', label: '供应商', fmt: v => v },
+    { key: 'calls', label: '调用次数', fmt: v => v.toLocaleString() },
+    { key: 'input', label: 'Input Tokens', fmt: fmtTokens },
+    { key: 'output', label: 'Output Tokens', fmt: fmtTokens },
+    { key: 'cost', label: '花费', fmt: fmtCost },
+    { key: 'avgCost', label: '均价/次', fmt: fmtCost },
+  ];
+
+  const sorted = [...models].map(m => ({ ...m, avgCost: m.calls > 0 ? m.cost / m.calls : 0 }))
+    .sort((a, b) => sortAsc ? (a[sortCol] > b[sortCol] ? 1 : -1) : (a[sortCol] < b[sortCol] ? 1 : -1));
+
+  const thead = $('#modelTable thead tr');
+  thead.innerHTML = cols.map(c =>
+    `<th data-col="${c.key}">${c.label} <span class="sort">${sortCol === c.key ? (sortAsc ? '▲' : '▼') : ''}</span></th>`
+  ).join('');
+
+  thead.querySelectorAll('th').forEach(th => {
+    th.onclick = () => {
+      const col = th.dataset.col;
+      if (sortCol === col) sortAsc = !sortAsc;
+      else { sortCol = col; sortAsc = false; }
+      renderModels(models);
+    };
+  });
+
+  const tbody = $('#modelTable tbody');
+  tbody.innerHTML = sorted.map(m => {
+    const isFree = m.cost === 0 && m.calls > 0;
+    return `<tr>${cols.map(c => {
+      let val = c.fmt(m[c.key]);
+      if (c.key === 'key' && isFree) val += ' <span class="free-tag">FREE</span>';
+      return `<td class="${['calls','input','output','cost','avgCost'].includes(c.key)?'mono':''}">${val}</td>`;
+    }).join('')}</tr>`;
+  }).join('');
+}
+
+function renderTips(tips) {
+  $('#tips').innerHTML = (tips || []).map(t =>
+    `<div class="tip"><span class="tip-icon ${t.type}"></span>${t.text}</div>`
+  ).join('') || '<div class="tip"><span class="tip-icon info"></span>暂无建议</div>';
+}
+
+async function fetchAll() {
+  try {
+    const [summary, daily, models, quotas, tips] = await Promise.all([
+      fetch(API + '/api/summary').then(r => r.json()),
+      fetch(API + '/api/daily?days=30').then(r => r.json()),
+      fetch(API + '/api/models').then(r => r.json()),
+      fetch(API + '/api/quotas').then(r => r.json()),
+      fetch(API + '/api/tips').then(r => r.json()),
+    ]);
+
+    $('#updatedAt').textContent = summary.updatedAt ? new Date(summary.updatedAt).toLocaleString('zh-CN') : '-';
+    renderOverview(summary.summary || {});
+    renderQuotas(quotas);
+    renderChart(daily.daily || []);
+    renderModels(models.models || []);
+    renderTips(tips.tips || []);
+  } catch (err) {
+    console.error('Fetch error:', err);
+    $('#updatedAt').textContent = '连接失败: ' + err.message;
+  }
+}
+
+// Init
+fetchAll();
+setInterval(fetchAll, 60000);
+window.addEventListener('resize', () => {
+  fetch(API + '/api/daily?days=30').then(r => r.json()).then(d => renderChart(d.daily || []));
+});
+</script>
+</body>
+</html>

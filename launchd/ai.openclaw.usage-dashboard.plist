@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+  <dict>
+    <key>Label</key>
+    <string>ai.openclaw.usage-dashboard</string>
+    <key>Comment</key>
+    <string>OpenClaw Usage Dashboard (v1.0.0)</string>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>ProgramArguments</key>
+    <array>
+      <string>/usr/local/bin/node</string>
+      <string>/Users/myking/.openclaw/workspace/skills/usage-dashboard/scripts/server.mjs</string>
+    </array>
+    <key>StandardOutPath</key>
+    <string>/Users/myking/.openclaw/logs/usage-dashboard.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/myking/.openclaw/logs/usage-dashboard.err.log</string>
+    <key>EnvironmentVariables</key>
+    <dict>
+      <key>HOME</key>
+      <string>/Users/myking</string>
+      <key>PATH</key>
+      <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+      <key>DASHBOARD_PORT</key>
+      <string>18790</string>
+      <key>http_proxy</key>
+      <string>http://127.0.0.1:10809</string>
+      <key>https_proxy</key>
+      <string>http://127.0.0.1:10809</string>
+      <key>all_proxy</key>
+      <string>http://127.0.0.1:10809</string>
+      <key>no_proxy</key>
+      <string>localhost,127.0.0.1,::1</string>
+    </dict>
+  </dict>
+</plist>
